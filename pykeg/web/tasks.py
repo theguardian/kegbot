@@ -18,11 +18,14 @@
 
 """Tasks for the Kegbot core."""
 
+import redis
+
 from kegbot.util import util
 from pykeg.plugin import util as plugin_util
 from pykeg import notification
 from pykeg.core import checkin
 from pykeg.core import stats
+from pykeg.web.eventbridge.common import publish_events
 
 from pykeg.celery import app
 from celery.utils.log import get_task_logger
@@ -31,6 +34,14 @@ logger = get_task_logger(__name__)
 
 def schedule_tasks(events):
     """Synchronously schedules tasks related to the given events."""
+    # Push to event bridge.
+    try:
+        publish_events(events)
+    except redis.exceptions.RedisError:
+        # Redis is down or other error; ignore.
+        pass
+
+    # Notify plugins.
     for event in events:
         for plugin in plugin_util.get_plugins():
             plugin.handle_new_event(event)
