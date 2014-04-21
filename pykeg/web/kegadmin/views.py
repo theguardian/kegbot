@@ -20,8 +20,13 @@
 
 import cStringIO
 import datetime
+import os
+import zipfile
+import json
 
 import redis
+
+from operator import itemgetter
 
 from django.conf import settings
 from django.contrib import messages
@@ -29,6 +34,7 @@ from django.contrib.admin.views.decorators import staff_member_required
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
 from django.core.urlresolvers import reverse
+from django.core.files.storage import get_storage_class
 from django.db.models import Q
 from django.forms import widgets
 from django.http import Http404
@@ -51,6 +57,7 @@ from pykeg.util.email import build_message
 
 from pykeg.web.kegadmin import forms
 from pykeg.web.tasks import core_checkin
+from pykeg.web.tasks import build_backup
 
 @staff_member_required
 def dashboard(request):
@@ -144,6 +151,50 @@ def email(request):
     context['email_configured'] = email_configured
 
     return render_to_response('kegadmin/email.html', context_instance=context)
+
+@staff_member_required
+def export(request):
+    context = RequestContext(request)
+    backups = []
+    storage = get_storage_class()()
+   
+    if request.method == 'POST':
+        if 'package_backup' in request.POST:
+            try:
+                request.backend.build_backup()
+                messages.success(request, 'The backup file is being generated in a background process. '
+                'It will be available on this page when the process is complete')
+            except redis.RedisError:
+                messages.error(request, 'Could not start backup worker')
+                pass
+
+        elif 'download_backup' in request.POST:
+            dl_file = storage.open('backups/' + request.POST['backup_name'], mode='rb')
+            response = HttpResponse(dl_file, content_type='application/force-download')
+            response['Content-Disposition'] = 'attachment; filename=%s' % request.POST['backup_name']
+            return response
+
+        elif 'delete_backup' in request.POST:
+            storage.delete('backups/' + request.POST['backup_name'])
+            messages.success(request, 'Backup successfully deleted')
+
+    subdirs, files = storage.listdir('backups')
+    for filename in files:
+        if filename[-3:] == 'zip':
+            zip_dir = filename[:-4]
+            with storage.open('backups/' + filename, mode='rb') as backup_file:
+                archive = zipfile.ZipFile(backup_file)
+                try:
+                    meta_file = archive.read(zip_dir+'/metadata.json')
+                    metadata = json.loads(meta_file)
+                    backups.append(metadata)
+                except:
+                    messages.error(request, 'Could not find metadata file in zip archive')
+
+    backups.sort(key=itemgetter('datetime'), reverse=True)
+    context['backups'] = backups
+
+    return render_to_response('kegadmin/backup_export.html', context_instance=context)
 
 @staff_member_required
 def workers(request):

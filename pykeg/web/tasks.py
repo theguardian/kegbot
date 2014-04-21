@@ -23,6 +23,7 @@ from pykeg.plugin import util as plugin_util
 from pykeg import notification
 from pykeg.core import checkin
 from pykeg.core import stats
+from pykeg.core import backup
 from django.db import transaction
 
 from pykeg.celery import app
@@ -49,3 +50,9 @@ def build_stats(since_drink_id):
     logger.info('build_stats since_drink_id={}'.format(since_drink_id))
     with transaction.atomic():
         stats.rebuild_from_id(since_drink_id)
+
+@app.task(name='build_backup', queue='stats', expires=60*60)
+def build_backup(self):
+    logger.info('build_backup')
+    with transaction.atomic():
+        backup.backup()
